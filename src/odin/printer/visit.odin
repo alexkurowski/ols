@@ -1007,10 +1007,10 @@ visit_stmt :: proc(
 		}
 
 		//Special case for when the if statement ends with a call expression
-		/* 
+		/*
 		  if my_function(
-		 	
-		  ) {	 	
+
+		  ) {
 		  }
 		*/
 		if v.init != nil && is_value_decl_statement_ending_with_call(v.init) ||
@@ -1742,13 +1742,23 @@ visit_expr :: proc(
 			contains_do |= contains_do_in_expression(p, arg)
 		}
 
-		if is_call_expr_nestable(v.args) {
-			document = cons(document, nest(cons(break_with(""), visit_call_exprs(p, v))))
-		} else {
-			document = cons(document, nest_if_break(cons(break_with(""), visit_call_exprs(p, v)), "call_expr"))
-		}
+		if should_wrap_call(v.args) {
+			if is_call_expr_nestable(v.args) {
+				document = cons(document, nest(cons(break_with(""), visit_call_exprs(p, v))))
+			} else {
+				document = cons(document, nest_if_break(cons(break_with(""), visit_call_exprs(p, v)), "call_expr"))
+			}
 
-		document = cons(document, break_with(""), text(")"))
+			document = cons(document, break_with(""), text(")"))
+		} else {
+			if is_call_expr_nestable(v.args) {
+				document = cons(document, nest(cons(visit_call_exprs(p, v))))
+			} else {
+				document = cons(document, nest_if_break(cons(visit_call_exprs(p, v)), "call_expr"))
+			}
+
+			document = cons(document, text(")"))
+		}
 
 		//Binary expression are nested on operators, and therefore undo the nesting in the call expression.
 		if called_from == .Binary_Expr {
@@ -1913,12 +1923,7 @@ visit_expr :: proc(
 		document = cons(document, text("]"))
 		document = cons(group(document), visit_expr(p, v.elem))
 	case ^ast.Tag_Expr:
-		document = cons(
-			text(v.op.text),
-			text(v.name),
-			break_with_no_newline(),
-			visit_expr(p, v.expr),
-		)
+		document = cons(text(v.op.text), text(v.name), break_with_no_newline(), visit_expr(p, v.expr))
 	case ^Matrix_Index_Expr:
 		document = cons(visit_expr(p, v.expr), text("["), visit_expr(p, v.row_index), text(","))
 		document = cons_with_opl(document, visit_expr(p, v.column_index))
@@ -2081,11 +2086,11 @@ visit_struct_field_list :: proc(p: ^Printer, list: ^ast.Field_List, options := L
 		}
 
 		name_options := List_Options{.Add_Comma}
-		
-		if (.Enforce_Newline in options)  {
+
+		if (.Enforce_Newline in options) {
 			if p.config.align_struct_fields {
 				alignment := get_possible_field_alignment(list.list)
-	
+
 				if alignment > 0 {
 					length := 0
 					for name in field.names {
@@ -2311,11 +2316,30 @@ visit_call_exprs :: proc(p: ^Printer, call_expr: ^ast.Call_Expr) -> ^Document {
 			document = cons(document, comments, break_with_space())
 		} else {
 			comments, _ := visit_comments(p, call_expr.close)
-			document = cons(document, if_break(","), comments)
+			if should_wrap_call(call_expr.args) {
+				document = cons(document, if_break(","), comments)
+			} else {
+				document = cons(document, comments)
+			}
 		}
 
 	}
 	return document
+}
+
+@(private)
+should_wrap_call :: proc(args: []^ast.Expr) -> bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	if _, first_is_comp_lit := args[0].derived.(^ast.Comp_Lit); first_is_comp_lit {
+		if _, last_is_comp_lit := args[len(args) - 1].derived.(^ast.Comp_Lit); last_is_comp_lit {
+			return false
+		}
+	}
+
+	return true
 }
 
 @(private)
